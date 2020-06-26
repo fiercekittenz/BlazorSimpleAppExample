@@ -1,0 +1,204 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.SignalR.Client
+@using BlazorSimpleAppExample.Shared
+@using Newtonsoft.Json
+@inject NavigationManager NavigationManager
+@inject HttpClient Http
+
+<h1>Best Tool Ever</h1>
+
+<p>
+   <b>Note: This is meant to be a very simple example of a Blazor Client application with an ASP.NET Core back-end. It will demonstrate the following:</b><br /><br />
+   <ul>
+      <li>SignalR bi-directional communication</li>
+      <li>Databinding to basic HTML input forms</li>
+      <li>Form error handling (not built-in handling, homegrown handling the way grandma used to make it!)</li>
+      <li>JSON serialization and deserialization</li>
+      <li>Simple controller usage</li>
+   </ul>
+</p>
+
+
+<div class="container p-2" style="width: 600px; align-content: center; border: dashed; border-width: 1px">
+   @if (_isErrorVisible)
+   {
+      <div class="container-fluid">
+         <font color="red"><b>@_errorText</b></font>
+      </div>
+   }
+   <div class="container p-2">
+      <form>
+         <div class="form-group">
+            <label for="uiFirstName">First Name:</label>
+            <input type="text" id="uiFirstName" @bind-value="_formUser.FirstName" />
+         </div>
+         <div class="form-group">
+            <label for="uiLastName">Last Name:</label>
+            <input type="text" id="uiLastName" @bind-value="_formUser.LastName" />
+         </div>
+      </form>
+   </div>
+   <div class="container p-2">
+      <button type="submit" @onclick="HandleFormSubmit">Add New User</button>
+   </div>
+</div>
+
+<div class="container p-2 mt-10" style="width: 600px; align-content: center">
+   <h4>System Users (Total Count = @_totalUserCount)</h4>
+   <table class="table" width="600" border="1">
+      <thead>
+         <tr>
+            <th scope="col">First Name</th>
+            <th scope="col">Last Name</th>
+            <th scope="col"></th>
+         </tr>
+      </thead>
+      <tbody>
+         @foreach (User user in _currentPageUsers)
+         {
+            <tr>
+               <td>@user.FirstName</td>
+               <td>@user.LastName</td>
+               <td><button type="button" @onclick="@(() => HandleDeleteUser(user))">Delete</button></td>
+            </tr>
+         }
+      </tbody>
+   </table>
+</div>
+
+@code
+{
+   protected override async Task OnInitializedAsync()
+   {
+      // First build the connection to the hub. Then you will follow up with creating
+      // event handlers for detecting a closed connection and specific messages you
+      // may expect to receive on this particular page.
+      _hubConnection = new HubConnectionBuilder()
+         .WithUrl(NavigationManager.ToAbsoluteUri("/datahub"))
+         .WithAutomaticReconnect()
+         .Build();
+
+      // Detect a disconnection.
+      _hubConnection.Closed += async (e) =>
+      {
+         Console.WriteLine("Disconnected from the Twitch Bot hub!");
+      };
+
+      // Handle reconnection events BECAUSE THEY ARE LOVELY.
+      _hubConnection.Reconnecting += async (e) =>
+      {
+         Console.WriteLine("Reconnecting now.... tell the user to wait a moment...");
+      };
+
+      _hubConnection.Reconnected += async (e) =>
+      {
+         Console.WriteLine("Reconnected now, tell the user all is right in the world");
+      };
+
+      // This is a SignalR hub handler. When the front-end receives a message
+      // called "UserDataUpdate", it will be handled in this lambda method.
+      _hubConnection.On<string>("UserDataUpdate", (rawData) =>
+      {
+         _currentPageUsers = JsonConvert.DeserializeObject<List<User>>(rawData);
+         StateHasChanged();
+      });
+
+      // Start the connection with the hub.
+      await _hubConnection.StartAsync();
+   }
+
+   /// <summary>
+   /// Takes the input from the form and submits it to the server.
+   /// </summary>
+   private async Task HandleFormSubmit()
+   {
+      // Do client-side verification of the data prior to sending to the server.
+      // The server will also check this, because the server should never trust
+      // the client. It looks redundant; however, this is a safety precaution to
+      // prevent users from injecting bad data.
+      if (!String.IsNullOrEmpty(_formUser.FirstName) && !String.IsNullOrEmpty(_formUser.LastName))
+      {
+         bool result = await _hubConnection.InvokeAsync<bool>("AddNewUser", _formUser);
+         if (!result)
+         {
+            _errorText = "Could not add new user. This user already exists.";
+            _isErrorVisible = true;
+         }
+         else
+         {
+            _errorText = String.Empty;
+            _isErrorVisible = false;
+            _formUser = new User();
+         }
+      }
+      else
+      {
+         _errorText = "First and last name are required!";
+         _isErrorVisible = true;
+      }
+
+      // Update the total count of users on the page with a simple HTTP request to a
+      // controller endpoint.
+      await UpdateUserCount();
+
+      // Let the page know the underlying data has changed and it needs to re-render elements
+      // that reference any variables.
+      StateHasChanged();
+   }
+
+   /// <summary>
+   /// Handles removing a specific user object.
+   /// </summary>
+   private async Task HandleDeleteUser(User userToDelete)
+   {
+      if (userToDelete != null)
+      {
+         await _hubConnection.InvokeAsync("DeleteUser", userToDelete);
+      }
+   }
+
+   /// <summary>
+   /// An example method that demonstrates how a HTTP request can be made of a
+   /// controller on the server to quickly retrieve information.
+   /// </summary>
+   private async Task UpdateUserCount()
+   {
+      string response = await Http.GetStringAsync("http://localhost:5002/example/usercount");
+      _totalUserCount = Int32.Parse(response);
+   }
+
+   /// <summary>
+   /// Hub Connection Instance: Represents the connection to the back-end of the signalr service.
+   /// </summary>
+   private HubConnection _hubConnection;
+
+   /// <summary>
+   /// A list of user data from the server. If using large result sets, only send what you would
+   /// expect the user to display on the page at a time to avoid sending thousands of results
+   /// over the web socket.
+   ///
+   /// Note: This example application does not cover pagineation, but this is an important thing
+   /// to call out as it's directly related to scalability as you grow your application.
+   /// </summary>
+   private List<User> _currentPageUsers = new List<User>();
+
+   /// <summary>
+   /// The total number of users in the system.
+   /// </summary>
+   private int _totalUserCount = 0;
+
+   /// <summary>
+   /// Local version of data for a user being created from the input form.
+   /// </summary>
+   private User _formUser = new User();
+
+   /// <summary>
+   /// Flag to denote if the error label should appear or not.
+   /// </summary>
+   private bool _isErrorVisible = false;
+
+   /// <summary>
+   /// An error message to display.
+   /// </summary>
+   private string _errorText = String.Empty;
+}
